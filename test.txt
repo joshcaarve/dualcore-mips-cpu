@@ -1,0 +1,455 @@
+/*
+	Joshua Brard
+	jbrard@purdue.edu
+
+    this block is the coherence protocol
+    and artibtration for ram
+*/
+
+// interface include
+`include "cache_control_if.vh"
+
+// memory types
+`include "cpu_types_pkg.vh"
+
+module memory_control (
+    input CLK, nRST,
+    cache_control_if.cc ccif
+);
+    // type import
+    import cpu_types_pkg::*;
+
+    typedef enum logic [3 : 0] {
+        INIT,
+        SELECT,
+        SNOOP,
+        READRAM0,
+        READRAM1,
+        READBUS0,
+        READBUS1,
+        READINSTR,
+        WRITEBLK0,
+        WRITEBLK1,
+        WRITEFIX0,
+        WRITEFIX1,
+        READFIX0,
+        READFIX1
+    } bus_state_t;
+
+    // number of cpus for cc
+    parameter CPUS = 2;
+
+    // select chooses between the two cores
+    logic select;
+
+
+
+    bus_state_t state;
+    bus_state_t next_state;
+
+    logic [1:0] ccwrite;
+    logic [1:0] cctrans;
+    logic [1:0] snoopaddr;
+    logic [1:0] inv;
+    logic [1:0] ccwait;
+    word_t [1:0] dload;
+    word_t [1:0] iload;
+
+    always_ff @ (posedge CLK, negedge nRST) begin
+        if (nRST == 1'b0) begin
+            state <= INIT;
+        end
+        else begin
+            state <= next_state;
+        end
+    end
+
+    always_comb begin : NEXT_STATE_LOGIC
+        next_state = state;
+        casez (state)
+            INIT : begin
+                if (ccif.iREN[0] || ccif.dREN[0] || ccif.dWEN[0] ||
+                    ccif.iREN[1] || ccif.dREN[1] || ccif.dWEN[1]) begin
+                    next_state = SELECT;
+                end
+                else begin
+                    next_state = INIT;
+                end
+            end
+            SELECT : begin
+                if (ccif.dWEN[select]) begin
+                    next_state = WRITEBLK0;
+                end
+                else if (ccif.dREN[select]) begin
+                    next_state = SNOOP;
+                end
+                else if (ccif.iREN[select]) begin
+                    next_state = READINSTR;
+                end
+            end
+            READINSTR : begin
+                if (ccif.ramstate == ACCESS) begin
+                   next_state = INIT;
+                end
+                else begin
+                   next_state = READINSTR;
+                end
+            end
+            WRITEBLK0 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = WRITEBLK1;
+                end
+                else begin
+                    next_state = WRITEBLK0;
+                end
+            end
+            WRITEBLK1 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = INIT;
+                end
+                else begin
+                    next_state = WRITEBLK1;
+                end
+            end
+            //TODO always pull from ram
+            SNOOP : begin
+                // !select because we need to snoop the other cache
+                casez ({cctrans[!select], ccwrite[!select]})
+                    // go to ram
+                    2'b0? : begin
+                        next_state = READRAM0;
+                    end
+                    // get from cache[!select]
+                    2'b10 : begin
+                        next_state = READBUS0;
+                    end
+                    // cache[!select] has value but is in modified state
+                    2'b11 : begin
+                        next_state = WRITEFIX0;
+                    end
+                    default : begin
+                        next_state = state;
+                    end
+                endcase
+            end
+            READBUS0 : begin
+                if (ccwrite[!select]) begin
+                    next_state = READBUS1;
+                end
+                else begin
+                    next_state = READBUS0;
+                end
+            end
+            READBUS1 : begin
+                if (ccwrite[!select]) begin
+                    next_state = INIT;
+                end
+                else begin
+                    next_state = READBUS1;
+                end
+            end
+            WRITEFIX0 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = WRITEFIX1;
+                end
+                else begin
+                    next_state = WRITEFIX0;
+                end
+            end
+            WRITEFIX1 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = READFIX0;
+                end
+                else begin
+                    next_state = WRITEFIX1;
+                end
+            end
+            READFIX0 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = READFIX1;
+                end
+                else begin
+                    next_state = READFIX0;
+                end
+            end
+            READFIX1 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = INIT;
+                end
+                else begin
+                    next_state = READFIX1;
+                end
+            end
+            READRAM0 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = READRAM1;
+                end
+                else begin
+                    next_state = READRAM0;
+                end
+            end
+            READRAM1 : begin
+                if (ccif.ramstate == ACCESS) begin
+                    next_state = INIT;
+                end
+                else begin
+                    next_state = READRAM1;
+                end
+            end
+        endcase
+    end : NEXT_STATE_LOGIC
+
+    always_ff @ (posedge CLK, negedge nRST) begin : SELECT_LOGIC
+        if (nRST == 1'b0) begin
+            select <= 1'b1;
+        end
+        else if (next_state == SELECT)begin
+            select <= !select;
+        end
+        else begin
+            select <= select;
+        end
+    end : SELECT_LOGIC
+
+    always_ff @ (posedge CLK, negedge nRST) begin : latches
+
+        if(nRST == 1'b0) begin
+
+            ccwrite <= '0;
+            cctrans <= '0;
+            ccif.ccsnoopaddr <= '0;
+            ccif.dload <= '0;
+            ccif.iload <= '0;
+            ccif.ccinv <= '0;
+            ccif.ccwait <= '0;
+
+
+        end
+
+        else if(state == INIT) begin
+
+            ccwrite <= ccif.ccwrite;
+            cctrans <= ccif.cctrans;
+            ccif.ccsnoopaddr <= snoopaddr;
+            ccif.dload <= dload;
+            ccif.iload <= iload;
+            ccif.ccinv <= inv;
+            ccif.ccwait <= ccwait;
+
+        end
+
+        else if(state == SELECT) begin
+
+            ccwrite <= ccif.ccwrite;
+            cctrans <= ccif.cctrans;
+            ccif.ccsnoopaddr <= snoopaddr;
+            ccif.dload <= dload;
+            ccif.iload <= iload;
+            ccif.ccinv <= inv;
+            ccif.ccwait <= ccwait;
+
+        end
+
+        else if(state == SNOOP) begin
+
+            ccwrite <= ccif.ccwrite;
+            cctrans <= ccif.cctrans;
+            ccif.ccsnoopaddr <= snoopaddr;
+            ccif.dload <= dload;
+            ccif.iload <= iload;
+            ccif.ccinv <= inv;
+            ccif.ccwait <= ccwait;
+
+        end
+
+        else if(state == READBUS0 ||state == READBUS1 || state == READFIX0 || state == READFIX1 || state == READINSTR || state == READRAM0 || READRAM1) begin
+
+            ccwrite <= ccif.ccwrite;
+            cctrans <= ccif.cctrans;
+            ccif.ccsnoopaddr <= snoopaddr;
+            ccif.dload <= dload;
+            ccif.iload <= iload;
+            ccif.ccinv <= inv;
+            ccif.ccwait <= ccwait;
+
+        end
+
+        else begin
+
+            ccwrite <= ccwrite;
+            cctrans <= cctrans;
+            ccif.ccsnoopaddr <= ccif.ccsnoopaddr;
+            ccif.dload <= ccif.dload;
+            ccif.iload <= ccif.iload;
+            ccif.ccinv <= ccif.ccinv;
+            ccif.ccwait <= ccif.ccwait;
+
+        end
+
+    end : latches
+
+
+    always_comb begin : OUTPUT_LOGIC
+        // cache outputs
+        ccif.iwait[0] = 1'b1;
+        ccif.iwait[1] = 1'b1;
+
+        ccif.dwait[0] = 1'b1;
+        ccif.dwait[1] = 1'b1;
+
+        iload[0] = '0;
+        iload[1] = '0;
+
+        dload[0] = '0;
+        dload[1] = '0;
+
+        // coherence outputs to cache
+        // FIXME
+        ccwait[0] = '0;
+        ccwait[1] = '0;
+
+        inv[0] = '0;
+        inv[1] = '0;
+
+        snoopaddr[0] = '0;
+        snoopaddr[1] = '0;
+
+        // ram outputs
+        ccif.ramstore = '0;
+        ccif.ramaddr = '0;
+        ccif.ramWEN = '0;
+        ccif.ramREN = '0;
+
+        casez (state)
+            INIT : begin
+                // ALL OUTPUTS DEFAULT
+                ccif.iwait[0] = 1'b0;
+                ccif.iwait[1] = 1'b0;
+
+                ccif.dwait[0] = 1'b0;
+                ccif.dwait[1] = 1'b0;
+            end
+            SELECT : begin
+                // FIXME
+                ccif.iwait[0] = 1'b1;
+                ccif.iwait[1] = 1'b1;
+
+                ccif.dwait[0] = 1'b1;
+                ccif.dwait[1] = 1'b1;
+            end
+            READINSTR : begin
+                ccif.ramREN = 1'b1;  // ccif.iREN
+                ccif.ramaddr = ccif.iaddr[select];
+                ccif.iwait[select] = 1'b1;
+                if (ccif.ramstate == ACCESS) begin
+                    iload[select] = ccif.ramload;
+                    ccif.iwait[select] = 1'b0;
+                end
+            end
+            WRITEBLK0 : begin
+                ccif.ramWEN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select][0] ? ccif.daddr[select] - 4 : ccif.daddr[select];  // assosciativity
+                ccif.dwait[select] = 1'b1;
+                ccif.ramstore = ccif.dstore[select];
+                if (ccif.ramstate == ACCESS) begin
+                    ccif.dwait[select] = 1'b0;
+                end
+
+            end
+            WRITEBLK1 : begin
+                ccif.ramWEN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select][0] ? ccif.daddr[select] : ccif.daddr[select] + 4;
+                ccif.dwait[select] = 1'b1;
+                ccif.ramstore = ccif.dstore[select];
+                if (ccif.ramstate == ACCESS) begin
+                    ccif.dwait[select] = 1'b0;
+                end
+            end
+            SNOOP : begin
+                ccwait[select] = 1'b1;
+                snoopaddr[!select] = ccif.daddr[select] ? ccif.daddr[select] - 4 : ccif.daddr[select];  // assosciativity
+            end
+            //FIXME:READBUS may not be synced with dacache due to silly flag states
+            READBUS0 : begin
+                ccwait[select] = 1'b1;
+                ccwait[!select] = 1'b1;
+
+                // FIXME WIP
+                ccif.dwait[select] = 1'b0;
+                dload[select] = ccif.dstore[!select];
+            end
+            READBUS1 : begin
+                ccwait[select] = 1'b1;
+                ccwait[!select] = 1'b1;
+
+                // FIXME WIP
+                ccif.dwait[select] = 1'b0;
+                dload[select] = ccif.dstore[!select];
+            end
+            // FIXME: invalidate ???? "yikes"
+            WRITEFIX0 : begin
+                ccwait[select] = 1'b1;
+                ccwait[!select] = 1'b1;
+
+                inv[!select] = 1'b1;
+
+                ccif.ramWEN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select] ? ccif.daddr[select] - 4 : ccif.daddr[select];  // assosciativity
+
+                ccif.dwait[select] = 1'b1;
+                ccif.dwait[!select] = 1'b1;
+            end
+            WRITEFIX1 : begin
+                ccwait[select] = 1'b1;
+                ccwait[!select] = 1'b1;
+
+                inv[!select] = 1'b1;
+
+                ccif.ramWEN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select] ? ccif.daddr[select] : ccif.daddr[select] + 4;
+
+                ccif.dwait[select] = 1'b1;
+                ccif.dwait[!select] = 1'b1;
+
+            end
+            READFIX0 : begin
+                ccif.ramREN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select] ? ccif.daddr[select] - 4 : ccif.daddr[select];  // assosciativity
+                ccif.dwait[select] = 1'b1;
+                if (ccif.ramstate == ACCESS) begin
+                    dload[select] = ccif.ramload;
+                    ccif.dwait[select] = 1'b0;
+                end
+            end
+            READFIX1 : begin
+                ccif.ramREN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select] ? ccif.daddr[select] : ccif.daddr[select] - 4;  // assosciativity
+                ccif.dwait[select] = 1'b1;
+                if (ccif.ramstate == ACCESS) begin
+                    dload[select] = ccif.ramload;
+                    ccif.dwait[select] = 1'b0;
+                end
+            end
+            READRAM0 : begin
+                ccif.ramREN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select] ? ccif.daddr[select] - 4 : ccif.daddr[select];  // assosciativity
+                ccif.dwait[select] = 1'b1;
+                if (ccif.ramstate == ACCESS) begin
+                    dload[select] = ccif.ramload;
+                    ccif.dwait[select] = 1'b0;
+                end
+            end
+            READRAM1 : begin
+                ccif.ramREN = 1'b1;
+                ccif.ramaddr = ccif.daddr[select] ? ccif.daddr[select] : ccif.daddr[select] - 4;  // assosciativity
+                ccif.dwait[select] = 1'b1;
+                if (ccif.ramstate == ACCESS) begin
+                    dload[select] = ccif.ramload;
+                    ccif.dwait[select] = 1'b0;
+                end
+            end
+        endcase
+    end : OUTPUT_LOGIC
+
+endmodule : memory_control
+
