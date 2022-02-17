@@ -1,0 +1,91 @@
+Questions for Dr.J:
+
+
+asmFile/FILE
+synthesize -t -f 200 system
+
+make system.wav:
+    runs FILE
+
+asm asmFile/FILE2
+make system.wav:
+    still runs FILE
+
+
+dcache:
+  Am I setting up the testbench for mapped correctly
+  does the code look suspiscious???
+
+.gitignore
+  added Makefile to it, was that bad....? (oops)
+
+Is it possible it is a Makefile error..?
+
+
+
+What to do from here, please help (very stressed about mapped error)
+Frequency has only gone up since pipeline
+dual.merge_sort passes on LAT=0 and LAT=2 so clearly working
+
+
+
+DR.J
+
+mapped file buffer to ground!!!
+
+
+
+11/20/19 Office hour with Dr.j
+
+Tried Quartus 15
+lint
+design compiler
+not sure
+
+
+
+11/20/19
+Rohan:
+Found that specific signals are lost due to fanout on quartus
+	; state~4                                  ; Lost fanout
+	; state~5                                  ; Lost fanout
+	; state~6                                  ; Lost fanout
+	; state~7                                  ; Lost fanout
+	; state.RAMWRITE0                          ; Merged with state.CLEANWRITE
+
+
+
+
+12/02/19
+6:30pm - 9pm in office hours with Tim
+
+./hal.do identified "extraneous logic" but is not verbose enough
+gonna attempt to separate next_cache from states and use control signals instead
+
+"One of the nastiest" - Tim
+
+
+12/03/19
+Dr.J packed
+
+"Certificate"
+
+
+test.coherence1 (synth)-> 23m :O
+
+testasm -s -d test.coherence1 -> 1m36s
+
+testasm -s -d test.coherence2 -> 45s
+
+testasm -s -d dual.merge -> 3m6s
+
+
+
+2:35 pm
+FMAX 85c (system.log) -> 31.85 MHz
+
+Gonna attempt to latch signals from Ram to increase CLK speed
+
+
+
+

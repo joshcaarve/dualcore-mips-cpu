@@ -1,0 +1,3 @@
+vlog source/dcache.sv +incdir+include
+vlog include/system_if.vh +incdir+include
+

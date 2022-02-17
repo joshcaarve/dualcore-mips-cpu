@@ -1,0 +1,18 @@
+# Req: S → M and Responder: S → I
+
+org 0x0000
+lw $1, 0x0F00($0)
+halt
+
+
+org 0x0200
+lw $1, 0x0F04($0)
+sw $1, 0x0F00($0)
+halt
+
+
+
+org 0x0F00
+cfw 0xDEAD
+org 0x0F04
+cfw 0xBEEF

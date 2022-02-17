@@ -1,0 +1,9 @@
+org 0x0000
+
+lw $5, 0xF00($10)
+and $3, $5, $5
+halt
+
+
+org 0x0F00
+cfw 0x0001
